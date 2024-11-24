@@ -2,11 +2,11 @@
 
 #include <cstdint>
 
-//#define min // workaround: nimble's min/max macros conflict with libstdc++
-//#define max
-//#include <host/ble_gap.h>
-//#undef max
-//#undef min
+#define min // workaround: nimble's min/max macros conflict with libstdc++
+#define max
+#include <host/ble_gap.h>
+#undef max
+#undef min
 //#include "components/ble/AlertNotificationClient.h"
 #include "components/ble/AlertNotificationService.h"
 //#include "components/ble/BatteryInformationService.h"
@@ -19,8 +19,8 @@
 #include "components/ble/MusicService.h"
 #include "components/ble/NavigationService.h"
 //#include "components/ble/ServiceDiscovery.h"
-//#include "components/ble/MotionService.h"
-#include "components/ble/weather/WeatherService.h"
+#include "components/ble/MotionService.h"
+#include "components/ble/SimpleWeatherService.h"
 #include "components/fs/FS.h"
 //#include "components/ble/FSService.h"
 
@@ -78,7 +78,7 @@ namespace Pinetime {
       Pinetime::Controllers::AlertNotificationService& alertService() {
         return anService;
       };
-      Pinetime::Controllers::WeatherService& weather() {
+      Pinetime::Controllers::SimpleWeatherService& weather() {
         return weatherService;
       };
 
@@ -111,17 +111,17 @@ namespace Pinetime {
 //      AlertNotificationClient alertNotificationClient;
 //      CurrentTimeService currentTimeService;
       MusicService musicService;
-      WeatherService weatherService;
+      SimpleWeatherService weatherService;
       NavigationService navService;
 //      BatteryInformationService batteryInformationService;
 //      ImmediateAlertService immediateAlertService;
 //      HeartRateService heartRateService;
-//      MotionService motionService;
+      MotionService motionService;
 //      FSService fsService;
 //      ServiceDiscovery serviceDiscovery;
 
       uint8_t addrType;
-//      uint16_t connectionHandle = BLE_HS_CONN_HANDLE_NONE;
+      uint16_t connectionHandle = BLE_HS_CONN_HANDLE_NONE;
       uint8_t fastAdvCount = 0;
       uint8_t bondId[16] = {0};
 

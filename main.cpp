@@ -20,6 +20,11 @@
 #include "lv_drivers/indev/keyboard.h"
 #include "lv_drivers/indev/mousewheel.h"
 
+
+# // be sure to get the sim headers for SimpleWeatherService.h
+#include "host/ble_gatt.h"
+#include "host/ble_uuid.h"
+
 // get PineTime header
 #include "displayapp/InfiniTimeTheme.h"
 #include <drivers/Hrs3300.h>
@@ -57,6 +62,9 @@
 #include <iostream>
 #include <typeinfo>
 #include <algorithm>
+#include <array>
+#include <vector>
+#include <span>
 #include <cmath> // std::pow
 
 // additional includes for 'saveScreenshot()' function
@@ -65,7 +73,7 @@
 #include <chrono>
 #include <ctime>   // localtime
 #if defined(WITH_PNG)
-#include <libpng/png.h>
+#include <png.h>
 #endif
 #include <gif.h>
 
@@ -354,7 +362,11 @@ Pinetime::Controllers::MotionController motionController;
 Pinetime::Controllers::TimerController timerController;
 #endif
 
+#if defined(ALARMCONTROLLER_NEEDS_FS)
+Pinetime::Controllers::AlarmController alarmController {dateTimeController, fs};
+#else
 Pinetime::Controllers::AlarmController alarmController {dateTimeController};
+#endif
 Pinetime::Controllers::TouchHandler touchHandler;
 Pinetime::Controllers::ButtonHandler buttonHandler;
 Pinetime::Controllers::BrightnessController brightnessController {};
@@ -376,7 +388,8 @@ Pinetime::Applications::DisplayApp displayApp(lcd,
                                               alarmController,
                                               brightnessController,
                                               touchHandler,
-                                              fs);
+                                              fs,
+                                              spiNorFlash);
 
 Pinetime::System::SystemTask systemTask(spi,
                                         spiNorFlash,
@@ -678,6 +691,7 @@ public:
       debounce('s', 'S', state[SDL_SCANCODE_S], key_handled_s);
       debounce('h', 'H', state[SDL_SCANCODE_H], key_handled_h);
       debounce('i', 'I', state[SDL_SCANCODE_I], key_handled_i);
+      debounce('w', 'W', state[SDL_SCANCODE_W], key_handled_w);
       // screen switcher buttons
       debounce('1', '!'+1, state[SDL_SCANCODE_1], key_handled_1);
       debounce('2', '!'+2, state[SDL_SCANCODE_2], key_handled_2);
@@ -780,6 +794,10 @@ public:
         } else {
           gif_manager.close();
         }
+      } else if (key == 'w') {
+        generate_weather_data(false);
+      } else if (key == 'W') {
+        generate_weather_data(true);
       } else if (key >= '0' && key <= '9') {
         this->switch_to_screen(key-'0');
       } else if (key >= '!'+0 && key <= '!'+9) {
@@ -796,6 +814,101 @@ public:
       batteryController.voltage = batteryController.percentRemaining * 50;
     }
 
+    void write_uint64(std::span<uint8_t> data, uint64_t val)
+    {
+      assert(data.size() >= 8);
+      for (int i=0; i<8; i++)
+      {
+        data[i] = (val >> (i*8)) & 0xff;
+      }
+    }
+    void write_int16(std::span<uint8_t> data, int16_t val)
+    {
+      assert(data.size() >= 2);
+      data[0] = val & 0xff;
+      data[1] = (val >> 8) & 0xff;
+    }
+    void set_current_weather(uint64_t timestamp, int16_t temperature, int iconId)
+    {
+      std::array<uint8_t, 49> dataBuffer {};
+      std::span<uint8_t> data(dataBuffer);
+      os_mbuf buffer;
+      ble_gatt_access_ctxt ctxt;
+      ctxt.om = &buffer;
+      buffer.om_data = dataBuffer.data();
+
+      // fill buffer with specified format
+      int16_t minTemperature = temperature;
+      int16_t maxTemperature = temperature;
+      dataBuffer.at(0) = 0; // MessageType::CurrentWeather
+      dataBuffer.at(1) = 0; // Vesion 0
+      write_uint64(data.subspan(2), timestamp);
+      write_int16(data.subspan(10), temperature);
+      write_int16(data.subspan(12), minTemperature);
+      write_int16(data.subspan(14), maxTemperature);
+      dataBuffer.at(48) = static_cast<uint8_t>(iconId);
+
+      // send weather to SimpleWeatherService
+      systemTask.nimble().weather().OnCommand(&ctxt);
+    }
+    void set_forecast(
+      uint64_t timestamp,
+      std::array<
+      std::optional<Pinetime::Controllers::SimpleWeatherService::Forecast::Day>,
+      Pinetime::Controllers::SimpleWeatherService::MaxNbForecastDays> days)
+    {
+      std::array<uint8_t, 36> dataBuffer {};
+      std::span<uint8_t> data(dataBuffer);
+      os_mbuf buffer;
+      ble_gatt_access_ctxt ctxt;
+      ctxt.om = &buffer;
+      buffer.om_data = dataBuffer.data();
+
+      // fill buffer with specified format
+      dataBuffer.at(0) = 1; // MessageType::Forecast
+      dataBuffer.at(1) = 0; // Vesion 0
+      write_uint64(data.subspan(2), timestamp);
+      dataBuffer.at(10) = static_cast<uint8_t>(days.size());
+      for (int i = 0; i < days.size(); i++)
+      {
+        const std::optional<Pinetime::Controllers::SimpleWeatherService::Forecast::Day> &day = days.at(i);
+        if (!day.has_value()) {
+          continue;
+        }
+        write_int16(data.subspan(11+(i*5)), day->minTemperature.PreciseCelsius());
+        write_int16(data.subspan(13+(i*5)), day->maxTemperature.PreciseCelsius());
+        dataBuffer.at(15+(i*5)) = static_cast<uint8_t>(day->iconId);
+      }
+      // send Forecast to SimpleWeatherService
+      systemTask.nimble().weather().OnCommand(&ctxt);
+    }
+
+    void generate_weather_data(bool clear) {
+      if (clear) {
+        set_current_weather(0, 0, 0);
+        std::array<std::optional<Pinetime::Controllers::SimpleWeatherService::Forecast::Day>, Pinetime::Controllers::SimpleWeatherService::MaxNbForecastDays> days;
+        set_forecast(0, days);
+        return;
+      }
+      auto timestamp = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+      srand((int)timestamp);
+
+      // Generate current weather data
+      int16_t temperature = (rand() % 81 - 40) * 100;
+      set_current_weather((uint64_t)timestamp, temperature, rand() % 9);
+
+      // Generate forecast data
+      std::array<std::optional<Pinetime::Controllers::SimpleWeatherService::Forecast::Day>, Pinetime::Controllers::SimpleWeatherService::MaxNbForecastDays> days;
+      for (int i = 0; i < Pinetime::Controllers::SimpleWeatherService::MaxNbForecastDays; i++) {
+        days[i] = Pinetime::Controllers::SimpleWeatherService::Forecast::Day {
+          Pinetime::Controllers::SimpleWeatherService::Temperature(temperature - rand() % 10 * 100),
+          Pinetime::Controllers::SimpleWeatherService::Temperature(temperature + rand() % 10 * 100),
+          Pinetime::Controllers::SimpleWeatherService::Icons(rand() % 9),
+        };
+      }
+      set_forecast((uint64_t)timestamp, days);
+    }
+
     void handle_touch_and_button() {
       int x, y;
       uint32_t buttons = SDL_GetMouseState(&x, &y);
@@ -803,12 +916,12 @@ public:
       const bool right_click = (buttons & SDL_BUTTON_RMASK) != 0;
       if (left_click) {
         left_release_sent = false;
-        systemTask.OnTouchEvent();
+        systemTask.PushMessage(Pinetime::System::Messages::OnTouchEvent);
         return;
       } else {
         if (!left_release_sent) {
           left_release_sent = true;
-          systemTask.OnTouchEvent();
+          systemTask.PushMessage(Pinetime::System::Messages::OnTouchEvent);
           return;
         }
       }
@@ -958,6 +1071,7 @@ private:
     bool key_handled_s = false; // s ... increase step count, S ... decrease step count
     bool key_handled_h = false; // h ... set heartrate running, H ... stop heartrate
     bool key_handled_i = false; // i ... take screenshot, I ... start/stop Gif screen capture
+    bool key_handled_w = false; // w ... generate weather data, W ... clear weather data
     // numbers from 0 to 9 to switch between screens
     bool key_handled_1 = false;
     bool key_handled_2 = false;

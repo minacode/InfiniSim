@@ -44,12 +44,11 @@ NimbleController::NimbleController(Pinetime::System::SystemTask& systemTask,
 //    alertNotificationClient {systemTask, notificationManager},
 //    currentTimeService {dateTimeController},
     musicService {systemTask},
-    weatherService {systemTask, dateTimeController},
-    navService {systemTask} {
+    weatherService {dateTimeController},
 //    batteryInformationService {batteryController},
 //    immediateAlertService {systemTask, notificationManager},
 //    heartRateService {systemTask, heartRateController},
-//    motionService {systemTask, motionController},
+    motionService {*this, motionController} {
 //    fsService {systemTask, fs},
 //    serviceDiscovery({&currentTimeClient, &alertNotificationClient}) {
 }
@@ -366,9 +365,9 @@ void NimbleController::StartDiscovery() {
 //  }
 }
 
-//uint16_t NimbleController::connHandle() {
-//  return connectionHandle;
-//}
+uint16_t NimbleController::connHandle() {
+  return connectionHandle;
+}
 
 void NimbleController::NotifyBatteryLevel(uint8_t level) {
 //  if (connectionHandle != BLE_HS_CONN_HANDLE_NONE) {
